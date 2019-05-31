@@ -4,11 +4,12 @@ const bodyParser = require('body-parser');
 const graphqlHttp = require('express-graphql');
 //pulls build schema out of the graphql package to build below
 const { buildSchema } = require('graphql');
-
+const mongoose = require('mongoose')
+const Event = require('./models/event');
+const User = require('./models/user');
+const bcrypt = require('bcryptjs')
 
 const app = express();
-
-const events = [];
 
 app.use(bodyParser.json());
 
@@ -24,6 +25,19 @@ app.use(
       description: String!
       price: Float!
       date: String!
+      creator: User!
+    }
+
+    type User {
+      _id: ID!
+      email: String!
+      password: String!
+      createdEvents: [Event!]
+    }
+
+    input UserInput {
+      email: String!
+      password: String!
     }
 
     input EventInput {
@@ -39,6 +53,7 @@ app.use(
 
     type RootMutation {
       createEvent(eventInput: EventInput): Event
+      createUser(userInput: UserInput): User
     }
     
     schema {
@@ -47,24 +62,76 @@ app.use(
     }
   `),
     rootValue: {
-      //these match the schema to the resolver functions. looks to run a function upon returning our list of events and "resolve them". Create event is set to an anonymous function that takes in a series of arguments. They get listed in key value pairs based on Event Input type created above. They get pushed to a global nmed event, then returned here. Root Mutation above runs what looks like function that takes in eventInput(named like a standard argument/variable) set to the EventInput schema outlined. It expects to return an Event.
       events: () => {
-        return events;
+        return Event.find()
+          .then(events => {
+            return events.map(event => {
+              return { ...event._doc, _id: event.id };
+            });
+          })
+          .catch(err => {
+            throw err;
+          });
       },
-      createEvent: (args) => {
-        const event = {
-          _id: Math.random().toString(),
+      createEvent: args => {
+        const event = new Event({
           title: args.eventInput.title,
           description: args.eventInput.description,
           price: +args.eventInput.price,
-          date: new Date().toISOString()
-        };
-        events.push(event)
-        return event;
+          date: new Date(args.eventInput.date),
+          creator: '5cf077fb96666d4adca65a72'
+        });
+        let createdEvent;
+        return event
+          .save()
+          .then(result => {
+            createdEvent = { ...result._doc, _id: result._doc._id.toString() };
+            return User.findById('5cf077fb96666d4adca65a72');
+          })
+          .then(user => {
+            if (!user) {
+              throw new Error('User not found.');
+            }
+            user.createdEvents.push(event);
+            return user.save();
+          })
+          .then(result => {
+            return createdEvent;
+          })
+          .catch(err => {
+            console.log(err);
+            throw err;
+          });
+      },
+      createUser: args => {
+        return User.findOne({ email: args.userInput.email })
+          .then(user => {
+            if (user) {
+              throw new Error('User exists already.');
+            }
+            return bcrypt.hash(args.userInput.password, 12);
+          })
+          .then(hashedPassword => {
+            const user = new User({
+              email: args.userInput.email,
+              password: hashedPassword
+            });
+            return user.save();
+          })
+          .then(result => {
+            return { ...result._doc, password: null, _id: result.id };
+          })
+          .catch(err => {
+            throw err;
+          });
       }
     },
     graphiql: true
   })
 );
+
+
+mongoose.connect("mongodb://localhost/eventdb", { useNewUrlParser: true });
+
 
 app.listen(3000)
